@@ -309,7 +309,7 @@ def trainModel(on_epoch_end=None, on_trial_result=None, on_data_load_end=None, a
                             cross_validator = StratifiedKFold(n_splits=5)
 
                         fold_histories = []
-                        for idx, train, val in  cross_validator.split(self.x_train, y_train_labels):
+                        for idx, (train, val) in  enumerate(cross_validator.split(self.x_train, y_train_labels)):
                             # Build model
                             print(f"Fold {idx + 1}: Building model...", flush=True)
                             classifier = model.buildLinearClassifier(
@@ -666,7 +666,7 @@ if __name__ == "__main__":
     cfg.AUTOTUNE_TRIALS = args.autotune_trials
     cfg.AUTOTUNE_EXECUTIONS_PER_TRIAL = args.autotune_executions_per_trial
 
-    cfg.CROSS_VALIDATION = args.mixup if args.mixup is not None else cfg.CROSS_VALIDATION
+    cfg.CROSS_VALIDATION = args.cross_validation if args.cross_validation is not None else cfg.CROSS_VALIDATION
 
     # Train model
     trainModel()

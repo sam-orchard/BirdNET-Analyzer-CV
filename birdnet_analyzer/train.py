@@ -18,6 +18,8 @@ import birdnet_analyzer.config as cfg
 import birdnet_analyzer.model as model
 import birdnet_analyzer.utils as utils
 
+from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold
+
 SCRIPT_DIR = os.path.abspath(os.path.dirname(__file__))
 
 
@@ -145,6 +147,9 @@ def _loadTrainingData(cache_mode="none", cache_file="", progress_callback=None):
 
     # Get valid labels
     valid_labels = [l for l in labels if l.lower() not in cfg.NON_EVENT_CLASSES and not l.startswith("-")]
+
+    if cfg.CROSS_VALIDATION:
+        cfg.CV_LABELS = valid_labels
 
     # Check if binary classification
     cfg.BINARY_CLASSIFICATION = len(valid_labels) == 1
@@ -293,52 +298,127 @@ def trainModel(on_epoch_end=None, on_trial_result=None, on_data_load_end=None, a
                 for execution in range(int(self.executions_per_trial)):
                     print(f"Running Trial #{trial_number} execution #{execution + 1}", flush=True)
 
-                    # Build model
-                    print("Building model...", flush=True)
-                    classifier = model.buildLinearClassifier(
-                        self.y_train.shape[1],
-                        self.x_train.shape[1],
-                        hidden_units=hp.Choice(
-                            "hidden_units", [0, 128, 256, 512, 1024, 2048], default=cfg.TRAIN_HIDDEN_UNITS
-                        ),
-                        dropout=hp.Choice("dropout", [0.0, 0.25, 0.33, 0.5, 0.75, 0.9], default=cfg.TRAIN_DROPOUT),
-                    )
-                    print("...Done.", flush=True)
+                    if cfg.CROSS_VALIDATION:
+                        # Generate a list of verbose labels from y_train as this is needed for the sklearn cross validation generators
+                        cross_validator = None
+                        y_train_labels = np.array([cfg.CV_LABELS[i] for i in np.where(self.y_train)[1]])
+                        groups = None
+                        if groups is not None:
+                            cross_validator = StratifiedGroupKFold(n_splits=5)
+                        else:
+                            cross_validator = StratifiedKFold(n_splits=5)
 
-                    # Only allow repeat upsampling in multi-label setting
-                    upsampling_choices = ["repeat", "mean", "linear"]  # SMOTE is too slow
+                        fold_histories = []
+                        for idx, train, val in  cross_validator.split(self.x_train, y_train_labels):
+                            # Build model
+                            print(f"Fold {idx + 1}: Building model...", flush=True)
+                            classifier = model.buildLinearClassifier(
+                                self.y_train[train].shape[1],
+                                self.x_train[train].shape[1],
+                                hidden_units=hp.Choice(
+                                    "hidden_units", [0, 128, 256, 512, 1024, 2048], default=cfg.TRAIN_HIDDEN_UNITS
+                                ),
+                                dropout=hp.Choice("dropout", [0.0, 0.25, 0.33, 0.5, 0.75, 0.9], default=cfg.TRAIN_DROPOUT),
+                            )
+                            print(f"Fold {idx + 1}: ...Done.", flush=True)
 
-                    if cfg.MULTI_LABEL:
-                        upsampling_choices = ["repeat"]
+                            # Only allow repeat upsampling in multi-label setting
+                            upsampling_choices = ["repeat", "mean", "linear"]  # SMOTE is too slow
 
-                    # Train model
-                    print("Training model...", flush=True)
-                    classifier, history = model.trainLinearClassifier(
-                        classifier,
-                        self.x_train,
-                        self.y_train,
-                        epochs=cfg.TRAIN_EPOCHS,
-                        batch_size=hp.Choice("batch_size", [8, 16, 32, 64, 128], default=cfg.TRAIN_BATCH_SIZE),
-                        learning_rate=hp.Choice(
-                            "learning_rate",
-                            [0.1, 0.01, 0.005, 0.002, 0.001, 0.0005, 0.0002, 0.0001],
-                            default=cfg.TRAIN_LEARNING_RATE,
-                        ),
-                        val_split=cfg.TRAIN_VAL_SPLIT,
-                        upsampling_ratio=hp.Choice(
-                            "upsampling_ratio", [0.0, 0.25, 0.33, 0.5, 0.75, 1.0], default=cfg.UPSAMPLING_RATIO
-                        ),
-                        upsampling_mode=hp.Choice("upsampling_mode", upsampling_choices, default=cfg.UPSAMPLING_MODE),
-                        train_with_mixup=hp.Boolean("mixup", default=cfg.TRAIN_WITH_MIXUP),
-                        train_with_label_smoothing=hp.Boolean(
-                            "label_smoothing", default=cfg.TRAIN_WITH_LABEL_SMOOTHING
-                        ),
-                    )
+                            if cfg.MULTI_LABEL:
+                                upsampling_choices = ["repeat"]
 
-                    # Get the best validation loss
-                    # Is it maybe better to return the negative val_auprc??
-                    best_val_loss = history.history["val_loss"][np.argmin(history.history["val_loss"])]
-                    histories.append(best_val_loss)
+                            # Train model
+                            print(f"Fold {idx + 1}: Training model...", flush=True)
+                            classifier, history = model.trainLinearClassifierWithCV(
+                                classifier,
+                                self.x_train[train],
+                                self.y_train[train],
+                                self.x_train[val],
+                                self.y_train[val],
+                                epochs=cfg.TRAIN_EPOCHS,
+                                batch_size=hp.Choice("batch_size", [8, 16, 32, 64, 128], default=cfg.TRAIN_BATCH_SIZE),
+                                learning_rate=hp.Choice(
+                                    "learning_rate",
+                                    [0.1, 0.01, 0.005, 0.002, 0.001, 0.0005, 0.0002, 0.0001],
+                                    default=cfg.TRAIN_LEARNING_RATE,
+                                ),
+                                upsampling_ratio=hp.Choice(
+                                    "upsampling_ratio", [0.0, 0.25, 0.33, 0.5, 0.75, 1.0], default=cfg.UPSAMPLING_RATIO
+                                ),
+                                upsampling_mode=hp.Choice("upsampling_mode", upsampling_choices,
+                                                          default=cfg.UPSAMPLING_MODE),
+                                train_with_mixup=hp.Boolean("mixup", default=cfg.TRAIN_WITH_MIXUP),
+                                train_with_label_smoothing=hp.Boolean(
+                                    "label_smoothing", default=cfg.TRAIN_WITH_LABEL_SMOOTHING
+                                ),
+                            )
+
+                            # Get the best validation loss for this particular fold
+                            # Is it maybe better to return the negative val_auprc??
+                            fold_best_val_loss = history.history["val_loss"][np.argmin(history.history["val_loss"])]
+                            fold_histories.append(fold_best_val_loss)
+
+                            print(
+                                f"Finished Training Fold #{idx + 1}",
+                                flush=True,
+                            )
+
+                        # Average the best validation losses from each fold to give a representative validation loss
+                        best_val_loss = np.mean(fold_histories)
+                        histories.append(best_val_loss)
+
+                        print(
+                            f"Finished Trial #{trial_number} execution #{execution + 1}. Average best validation loss: {best_val_loss}",
+                            flush=True,
+                        )
+                    else:
+                        # Build model
+                        print("Building model...", flush=True)
+                        classifier = model.buildLinearClassifier(
+                            self.y_train.shape[1],
+                            self.x_train.shape[1],
+                            hidden_units=hp.Choice(
+                                "hidden_units", [0, 128, 256, 512, 1024, 2048], default=cfg.TRAIN_HIDDEN_UNITS
+                            ),
+                            dropout=hp.Choice("dropout", [0.0, 0.25, 0.33, 0.5, 0.75, 0.9], default=cfg.TRAIN_DROPOUT),
+                        )
+                        print("...Done.", flush=True)
+
+                        # Only allow repeat upsampling in multi-label setting
+                        upsampling_choices = ["repeat", "mean", "linear"]  # SMOTE is too slow
+
+                        if cfg.MULTI_LABEL:
+                            upsampling_choices = ["repeat"]
+
+                        # Train model
+                        print("Training model...", flush=True)
+                        classifier, history = model.trainLinearClassifier(
+                            classifier,
+                            self.x_train,
+                            self.y_train,
+                            epochs=cfg.TRAIN_EPOCHS,
+                            batch_size=hp.Choice("batch_size", [8, 16, 32, 64, 128], default=cfg.TRAIN_BATCH_SIZE),
+                            learning_rate=hp.Choice(
+                                "learning_rate",
+                                [0.1, 0.01, 0.005, 0.002, 0.001, 0.0005, 0.0002, 0.0001],
+                                default=cfg.TRAIN_LEARNING_RATE,
+                            ),
+                            val_split=cfg.TRAIN_VAL_SPLIT,
+                            upsampling_ratio=hp.Choice(
+                                "upsampling_ratio", [0.0, 0.25, 0.33, 0.5, 0.75, 1.0], default=cfg.UPSAMPLING_RATIO
+                            ),
+                            upsampling_mode=hp.Choice("upsampling_mode", upsampling_choices, default=cfg.UPSAMPLING_MODE),
+                            train_with_mixup=hp.Boolean("mixup", default=cfg.TRAIN_WITH_MIXUP),
+                            train_with_label_smoothing=hp.Boolean(
+                                "label_smoothing", default=cfg.TRAIN_WITH_LABEL_SMOOTHING
+                            ),
+                        )
+
+                        # Get the best validation loss
+                        # Is it maybe better to return the negative val_auprc??
+                        best_val_loss = history.history["val_loss"][np.argmin(history.history["val_loss"])]
+                        histories.append(best_val_loss)
 
                     print(
                         f"Finished Trial #{trial_number} execution #{execution + 1}. best validation loss: {best_val_loss}",
@@ -548,6 +628,14 @@ if __name__ == "__main__":
         help="The number of times a training run with a set of hyperparameters is repeated during hyperparameter tuning (this reduces the variance). Defaults to 1.",
     )
 
+    parser.add_argument(
+        "--cross_validation",
+        action=argparse.BooleanOptionalAction,
+        help="Enables an initial Stratified Group K-Fold cross validation to establish best training/validation split prior to training. Value of 1 enables the cross validation. Defaults to 0"
+    )
+
+    #TODO: Add options for cross validation as arguments
+
     args = parser.parse_args()
 
     # Config
@@ -577,6 +665,8 @@ if __name__ == "__main__":
     cfg.AUTOTUNE = args.autotune
     cfg.AUTOTUNE_TRIALS = args.autotune_trials
     cfg.AUTOTUNE_EXECUTIONS_PER_TRIAL = args.autotune_executions_per_trial
+
+    cfg.CROSS_VALIDATION = args.mixup if args.mixup is not None else cfg.CROSS_VALIDATION
 
     # Train model
     trainModel()

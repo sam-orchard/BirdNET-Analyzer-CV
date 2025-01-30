@@ -356,6 +356,129 @@ def trainLinearClassifier(
 
     return classifier, history
 
+def trainLinearClassifierWithCV(
+    classifier,
+    x_train,
+    y_train,
+    x_val,
+    y_val,
+    epochs,
+    batch_size,
+    learning_rate,
+    upsampling_ratio,
+    upsampling_mode,
+    train_with_mixup,
+    train_with_label_smoothing,
+    on_epoch_end=None,
+    groups=None,
+):
+    """Trains a custom classifier with cross validation.
+
+    Trains a new classifier for BirdNET based on the given data.
+    Training and validation sets are explicitly passed as arguments, having already been split by the cross validator
+    in BirdNetTuner run_trial function. Therefore, the val_split argument is removed as no splitting is performed within
+    this function.
+
+    Args:
+        classifier: The classifier to be trained.
+        x_train: Training Samples split by cross validator.
+        y_train: Training Labels split by cross_validator.
+        x_val: Validation samples split by cross validator.
+        y_val: Validation labels split by cross validator.
+        epochs: Number of epochs to train.
+        batch_size: Batch size.
+        learning_rate: The learning rate during training.
+        upsampling_ratio: Upsampling ratio.
+        upsampling_mode: Upsampling mode.
+        train_with_mixup: If True, applies mixup to the training data.
+        train_with_label_smoothing: If True, applies label smoothing to the training data.
+        on_epoch_end: Optional callback `function(epoch, logs)`,
+        groups: List of groups associated with x_train samples, for use in Stratified Group K Fold sampling
+
+    Returns:
+        (classifier, history)
+    """
+    # import keras
+    from tensorflow import keras
+
+    class FunctionCallback(keras.callbacks.Callback):
+        def __init__(self, on_epoch_end=None) -> None:
+            super().__init__()
+            self.on_epoch_end_fn = on_epoch_end
+
+        def on_epoch_end(self, epoch, logs=None):
+            if self.on_epoch_end_fn:
+                self.on_epoch_end_fn(epoch, logs)
+
+    # Set random seed
+    np.random.seed(cfg.RANDOM_SEED)
+
+    print(
+        f"Training on {x_train.shape[0]} samples, validating on {x_val.shape[0]} samples.",
+        flush=True,
+    )
+
+    # Upsample training data
+    if upsampling_ratio > 0:
+        x_train, y_train = utils.upsampling(x_train, y_train, upsampling_ratio, upsampling_mode)
+        print(f"Upsampled training data to {x_train.shape[0]} samples.", flush=True)
+
+    # Apply mixup to training data
+    if train_with_mixup and not cfg.BINARY_CLASSIFICATION:
+        x_train, y_train = utils.mixup(x_train, y_train)
+
+    # Apply label smoothing
+    if train_with_label_smoothing and not cfg.BINARY_CLASSIFICATION:
+        y_train = utils.label_smoothing(y_train)
+
+
+    # Early stopping
+    callbacks = [
+        keras.callbacks.EarlyStopping(
+            monitor="val_loss",
+            patience=5,
+            verbose=1,
+            start_from_epoch=5,
+            restore_best_weights=True,
+        ),
+        FunctionCallback(on_epoch_end=on_epoch_end),
+    ]
+
+    # Cosine annealing lr schedule
+    lr_schedule = keras.experimental.CosineDecay(learning_rate, epochs * x_train.shape[0] / batch_size)
+
+    optimizer_cls = keras.optimizers.legacy.Adam if sys.platform == "darwin" else keras.optimizers.Adam
+
+    # Compile model
+    classifier.compile(
+        optimizer=optimizer_cls(learning_rate=lr_schedule),
+        loss=custom_loss,
+        metrics=[
+            keras.metrics.AUC(
+                curve="PR",
+                multi_label=cfg.MULTI_LABEL,
+                name="AUPRC",
+                num_labels=y_train.shape[1] if cfg.MULTI_LABEL else None,
+                from_logits=True,
+            ),
+            keras.metrics.AUC(
+                curve="ROC",
+                multi_label=cfg.MULTI_LABEL,
+                name="AUROC",
+                num_labels=y_train.shape[1] if cfg.MULTI_LABEL else None,
+                from_logits=True,
+            ),
+        ],
+    )
+
+    # Train model
+    history = classifier.fit(
+        x_train, y_train, epochs=epochs, batch_size=batch_size, validation_data=(x_val, y_val),
+        callbacks=callbacks
+    )
+
+    return classifier, history
+
 
 def saveLinearClassifier(classifier, model_path: str, labels: list[str], mode="replace"):
     """Saves the classifier as a tflite model, as well as the used labels in a .txt.

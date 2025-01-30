@@ -191,6 +191,10 @@ BINARY_CLASSIFICATION: bool = False
 # This value will automatically be set, if subfolders in the input direcotry are named with multiple classes separated by commas.
 MULTI_LABEL: bool = False
 
+# If cross validation is applied to generate optimal train/validation splits.
+# Maximises validation accuracy in training
+CROSS_VALIDATION: bool = False
+
 #####################
 # Misc runtime vars #
 #####################
@@ -201,6 +205,7 @@ SPECIES_LIST: list[str] = []
 ERROR_LOG_FILE: str = "error_log.txt"
 FILE_LIST = []
 FILE_STORAGE_PATH: str = ""
+CV_LABELS = [] # List of Labels to be used for conversion of y_train during cross validation
 
 ######################
 # Get and set config #
@@ -268,6 +273,8 @@ def getConfig():
         "FILE_STORAGE_PATH": FILE_STORAGE_PATH,
         "SKIP_EXISTING_RESULTS": SKIP_EXISTING_RESULTS,
         "USE_NOISE": USE_NOISE,
+        "CROSS_VALIDATION": CROSS_VALIDATION,
+        "CV_LABELS": CV_LABELS,
     }
 
 
@@ -331,6 +338,8 @@ def setConfig(c):
     global FILE_STORAGE_PATH
     global SKIP_EXISTING_RESULTS
     global USE_NOISE
+    global CROSS_VALIDATION
+    global CV_LABELS
 
     RANDOM_SEED = c["RANDOM_SEED"]
     MODEL_VERSION = c["MODEL_VERSION"]
@@ -391,3 +400,5 @@ def setConfig(c):
     FILE_STORAGE_PATH = c["FILE_STORAGE_PATH"]
     SKIP_EXISTING_RESULTS = c["SKIP_EXISTING_RESULTS"]
     USE_NOISE = c["USE_NOISE"]
+    CROSS_VALIDATION = c["CROSS_VALIDATION"]
+    CV_LABELS = c["CV_LABELS"]

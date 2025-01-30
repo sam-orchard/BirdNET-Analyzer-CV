@@ -164,3 +164,6 @@ autotune/
 gui-settings.json
 state.json
 entitlements.plist
+
+# intellij idea foler
+.idea

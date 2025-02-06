@@ -2,6 +2,7 @@
 """
 
 import os
+import re
 import traceback
 from pathlib import Path
 
@@ -632,3 +633,24 @@ def save_result_file(result_path: str, out_string: str):
     # Write the result to the file
     with open(result_path, "w", encoding="utf-8") as rfile:
         rfile.write(out_string)
+
+def get_group_from_filename(path, regex=r'*'):
+    """
+    Gets a group identifier from the filename of a file
+
+    Args:
+        path: path to file
+        regex: regex for extracting a group identifier from the filename
+
+    Returns: str Group identifier
+    """
+    regex = re.compile(regex)
+
+    filename = path.split('/')[-1]
+    match = regex.search(filename)
+    if match is not None:
+        group = match.group()
+    else:
+        group = 'NO_GROUP'
+
+    return group

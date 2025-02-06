@@ -206,6 +206,7 @@ ERROR_LOG_FILE: str = "error_log.txt"
 FILE_LIST = []
 FILE_STORAGE_PATH: str = ""
 CV_LABELS = [] # List of Labels to be used for conversion of y_train during cross validation
+CV_GROUPS = [] # List of groups associated with each test sample, currently only supports groups from HumbugDB dataset
 
 ######################
 # Get and set config #

@@ -184,6 +184,9 @@ def _loadTrainingData(cache_mode="none", cache_file="", progress_callback=None):
     x_train = []
     y_train = []
 
+    # Assign variable to track group of each sample
+    groups = []
+
     for folder in folders:
         # Get label vector
         label_vector = np.zeros((len(valid_labels),), dtype="float32")
@@ -213,6 +216,10 @@ def _loadTrainingData(cache_mode="none", cache_file="", progress_callback=None):
             tasks = []
 
             for f in files:
+                if cfg.CROSS_VALIDATION:
+                    # Get the group from the filename by regex. Currently hard-coded to look for the hour-minute timestamp
+                    # in files from the HumbugDB database. Regex may be flimsy so could be improved to be more robust?
+                    groups.append(utils.get_group_from_filename(f, regex=r'(?<=\d-)(\d+-\d+)'))
                 task = p.apply_async(partial(_loadAudioFile, f=f, label_vector=label_vector, config=cfg.getConfig()))
                 tasks.append(task)
 
@@ -238,6 +245,7 @@ def _loadTrainingData(cache_mode="none", cache_file="", progress_callback=None):
     # Convert to numpy arrays
     x_train = np.array(x_train, dtype="float32")
     y_train = np.array(y_train, dtype="float32")
+    groups = np.array(groups)
 
     # Save to cache?
     if cache_mode == "save":
@@ -249,7 +257,7 @@ def _loadTrainingData(cache_mode="none", cache_file="", progress_callback=None):
             print(f"\t...error saving cache: {e}", flush=True)
 
     # Return only the valid labels for further use
-    return x_train, y_train, valid_labels
+    return x_train, y_train, valid_labels, groups
 
 
 def trainModel(on_epoch_end=None, on_trial_result=None, on_data_load_end=None, autotune_directory="autotune"):
@@ -264,8 +272,11 @@ def trainModel(on_epoch_end=None, on_trial_result=None, on_data_load_end=None, a
 
     # Load training data
     print("Loading training data...", flush=True)
-    x_train, y_train, labels = _loadTrainingData(cfg.TRAIN_CACHE_MODE, cfg.TRAIN_CACHE_FILE, on_data_load_end)
+    x_train, y_train, labels, groups = _loadTrainingData(cfg.TRAIN_CACHE_MODE, cfg.TRAIN_CACHE_FILE, on_data_load_end)
     print(f"...Done. Loaded {x_train.shape[0]} training samples and {y_train.shape[1]} labels.", flush=True)
+
+    # Store groups in cfg
+    cfg.CV_GROUPS = groups
 
     if cfg.AUTOTUNE:
         import gc
@@ -302,14 +313,14 @@ def trainModel(on_epoch_end=None, on_trial_result=None, on_data_load_end=None, a
                         # Generate a list of verbose labels from y_train as this is needed for the sklearn cross validation generators
                         cross_validator = None
                         y_train_labels = np.array([cfg.CV_LABELS[i] for i in np.where(self.y_train)[1]])
-                        groups = None
-                        if groups is not None:
+                        groups = cfg.CV_GROUPS
+                        if len(groups):
                             cross_validator = StratifiedGroupKFold(n_splits=5)
                         else:
                             cross_validator = StratifiedKFold(n_splits=5)
 
                         fold_histories = []
-                        for idx, (train, val) in  enumerate(cross_validator.split(self.x_train, y_train_labels)):
+                        for idx, (train, val) in  enumerate(cross_validator.split(self.x_train, y_train_labels, groups)):
                             # Build model
                             print(f"Fold {idx + 1}: Building model...", flush=True)
                             classifier = model.buildLinearClassifier(
@@ -666,7 +677,7 @@ if __name__ == "__main__":
     cfg.AUTOTUNE_TRIALS = args.autotune_trials
     cfg.AUTOTUNE_EXECUTIONS_PER_TRIAL = args.autotune_executions_per_trial
 
-    cfg.CROSS_VALIDATION = args.cross_validation if args.cross_validation is not None else cfg.CROSS_VALIDATION
+    cfg.CROSS_VALIDATION = args.cross_validation
 
     # Train model
     trainModel()

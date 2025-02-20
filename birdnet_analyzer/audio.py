@@ -4,6 +4,7 @@ import librosa
 import numpy as np
 import soundfile as sf
 from scipy.signal import firwin, kaiserord, lfilter
+from audiomentations import AddBackgroundNoise, PolarityInversion
 
 
 import birdnet_analyzer.config as cfg
@@ -293,3 +294,30 @@ def bandpassKaiserFIR(sig, rate, fmin, fmax, width=0.02, stopband_attenuation_db
     sig = lfilter(taps, 1.0, sig)
 
     return sig.astype("float32")
+
+
+def augment_audio_file(sig, sample_rate, noise_directory, min_absolute_rms_db=-45, max_absolute_rms_db=-15):
+    """
+    Uses the audiomentations library to add background noise to clean sounds
+    Args:
+        sig: Original audio signal
+        sample_rate: Signal Sample Rate (Hz)
+        noise_directory: Path to directory containing background sounds
+        min_absolute_rms_db:
+        max_absolute_rms_db:
+
+    Returns: numpy.ndarray: The augmented audio signal
+
+    """
+    # Create transform
+    transform = AddBackgroundNoise(
+        sounds_path=noise_directory,
+        noise_transform=PolarityInversion(),
+        noise_rms='absolute',
+        min_snr_db=min_absolute_rms_db,
+        max_absolute_rms_db=max_absolute_rms_db,
+        p=1.0
+    )
+    augmented_data = transform(sig, sample_rate)
+
+    return augmented_data

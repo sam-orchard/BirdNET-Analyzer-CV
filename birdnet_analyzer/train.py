@@ -63,6 +63,9 @@ def _loadAudioFile(f, label_vector, config):
     x_train = []
     y_train = []
 
+    # Variable to store embeddings of x_train with noise overlayed for validation
+    x_train_augmented = []
+
     # restore config in case we're on Windows to be thread save
     cfg.setConfig(config)
 
@@ -75,6 +78,12 @@ def _loadAudioFile(f, label_vector, config):
             fmin=cfg.BANDPASS_FMIN,
             fmax=cfg.BANDPASS_FMAX,
         )
+
+        if cfg.DATA_AUGMENTATION:
+            # Augment the signal by adding background noise
+            aug_sig = audio.augment_audio_file(sig, rate, noise_directory=cfg.SOUNDS_PATH)
+        else:
+            aug_sig = None
 
     # if anything happens print the error and ignore the file
     except Exception as e:
@@ -102,7 +111,26 @@ def _loadAudioFile(f, label_vector, config):
         x_train.extend(embeddings)
         y_train.extend(batch_label)
 
-    return x_train, y_train
+    if cfg.DATA_AUGMENTATION and aug_sig is not None:
+        # Repeat cropping and embedding for augmented training samples
+        if cfg.SAMPLE_CROP_MODE == "center":
+            aug_sig_splits = [audio.cropCenter(aug_sig, rate, cfg.SIG_LENGTH)]
+        elif cfg.SAMPLE_CROP_MODE == "first":
+            aug_sig_splits = [audio.splitSignal(aug_sig, rate, cfg.SIG_LENGTH, cfg.SIG_OVERLAP, cfg.SIG_MINLEN)[0]]
+        else:
+            aug_sig_splits = audio.splitSignal(aug_sig, rate, cfg.SIG_LENGTH, cfg.SIG_OVERLAP, cfg.SIG_MINLEN)
+
+        # Get feature embeddings
+        batch_size = 1  # turns out that batch size 1 is the fastest, probably because of having to resize the model input when the number of samples in a batch changes
+        for i in range(0, len(aug_sig_splits), batch_size):
+            batch_sig = aug_sig_splits[i : i + batch_size]
+            batch_label = [label_vector] * len(batch_sig)
+            embeddings = model.embeddings(batch_sig)
+
+            # Add to augmented training data. Label should be the same so no need for separate y_train array
+            x_train_augmented.extend(embeddings)
+
+    return x_train, y_train, x_train_augmented
 
 
 def _loadTrainingData(cache_mode="none", cache_file="", progress_callback=None):
@@ -184,6 +212,9 @@ def _loadTrainingData(cache_mode="none", cache_file="", progress_callback=None):
     x_train = []
     y_train = []
 
+    # Training sample with background noise added
+    x_train_augmented = []
+
     # Assign variable to track group of each sample
     groups = []
 
@@ -218,7 +249,7 @@ def _loadTrainingData(cache_mode="none", cache_file="", progress_callback=None):
             for f in files:
                 if cfg.CROSS_VALIDATION:
                     # Get the group from the filename by regex. Currently hard-coded to look for the hour-minute timestamp
-                    # in files from the HumbugDB database. Regex may be flimsy so could be improved to be more robust?
+                    # in files from the InsectSound1000 database. Regex may be flimsy so could be improved to be more robust?
                     groups.append(utils.get_group_from_filename(f, regex=r'(?<=\d-)(\d+-\d+)'))
                 task = p.apply_async(partial(_loadAudioFile, f=f, label_vector=label_vector, config=cfg.getConfig()))
                 tasks.append(task)
@@ -235,6 +266,7 @@ def _loadTrainingData(cache_mode="none", cache_file="", progress_callback=None):
                     if len(result[0]) > 0:
                         x_train += result[0]
                         y_train += result[1]
+                        x_train_augmented += result[2]
 
                     num_files_processed += 1
                     progress_bar.update(1)
@@ -245,6 +277,7 @@ def _loadTrainingData(cache_mode="none", cache_file="", progress_callback=None):
     # Convert to numpy arrays
     x_train = np.array(x_train, dtype="float32")
     y_train = np.array(y_train, dtype="float32")
+    x_train_augmented = np.array(x_train_augmented, dtype="float32")
     groups = np.array(groups)
 
     # Save to cache?
@@ -257,7 +290,7 @@ def _loadTrainingData(cache_mode="none", cache_file="", progress_callback=None):
             print(f"\t...error saving cache: {e}", flush=True)
 
     # Return only the valid labels for further use
-    return x_train, y_train, valid_labels, groups
+    return x_train, y_train, valid_labels, x_train_augmented, groups
 
 
 def trainModel(on_epoch_end=None, on_trial_result=None, on_data_load_end=None, autotune_directory="autotune"):
@@ -272,8 +305,12 @@ def trainModel(on_epoch_end=None, on_trial_result=None, on_data_load_end=None, a
 
     # Load training data
     print("Loading training data...", flush=True)
-    x_train, y_train, labels, groups = _loadTrainingData(cfg.TRAIN_CACHE_MODE, cfg.TRAIN_CACHE_FILE, on_data_load_end)
+    x_train, y_train, labels, x_train_augmented, groups = _loadTrainingData(cfg.TRAIN_CACHE_MODE, cfg.TRAIN_CACHE_FILE, on_data_load_end)
     print(f"...Done. Loaded {x_train.shape[0]} training samples and {y_train.shape[1]} labels.", flush=True)
+
+    # If we're not using data augmentation, just set x_train_augmented to None
+    if not cfg.DATA_AUGMENTATION:
+        x_train_augmented = None
 
     # Store groups in cfg
     cfg.CV_GROUPS = groups
@@ -289,7 +326,7 @@ def trainModel(on_epoch_end=None, on_trial_result=None, on_data_load_end=None, a
             on_trial_result(0)
 
         class BirdNetTuner(keras_tuner.BayesianOptimization):
-            def __init__(self, x_train, y_train, max_trials, executions_per_trial, on_trial_result):
+            def __init__(self, x_train, y_train, max_trials, executions_per_trial, on_trial_result, x_train_augmented=None):
                 super().__init__(
                     max_trials=max_trials,
                     executions_per_trial=executions_per_trial,
@@ -300,6 +337,8 @@ def trainModel(on_epoch_end=None, on_trial_result=None, on_data_load_end=None, a
                 self.x_train = x_train
                 self.y_train = y_train
                 self.on_trial_result = on_trial_result
+
+                self.x_train_augmented = x_train_augmented
 
             def run_trial(self, trial, *args, **kwargs):
                 histories = []
@@ -339,14 +378,20 @@ def trainModel(on_epoch_end=None, on_trial_result=None, on_data_load_end=None, a
                             if cfg.MULTI_LABEL:
                                 upsampling_choices = ["repeat"]
 
+                            y_val = self.y_train[val]
+                            if cfg.DATA_AUGMENTATION and self.x_train_augmented is not None:
+                                x_val = self.x_train_augmented[val]
+                            else:
+                                x_val = self.x_train[val]
+
                             # Train model
                             print(f"Fold {idx + 1}: Training model...", flush=True)
                             classifier, history = model.trainLinearClassifierWithCV(
                                 classifier,
                                 self.x_train[train],
                                 self.y_train[train],
-                                self.x_train[val],
-                                self.y_train[val],
+                                x_val,
+                                y_val,
                                 epochs=cfg.TRAIN_EPOCHS,
                                 batch_size=hp.Choice("batch_size", [8, 16, 32, 64, 128], default=cfg.TRAIN_BATCH_SIZE),
                                 learning_rate=hp.Choice(
@@ -453,6 +498,7 @@ def trainModel(on_epoch_end=None, on_trial_result=None, on_data_load_end=None, a
             max_trials=cfg.AUTOTUNE_TRIALS,
             executions_per_trial=cfg.AUTOTUNE_EXECUTIONS_PER_TRIAL,
             on_trial_result=on_trial_result,
+            x_train_augmented=x_train_augmented
         )
         try:
             tuner.search()
@@ -642,7 +688,19 @@ if __name__ == "__main__":
     parser.add_argument(
         "--cross_validation",
         action=argparse.BooleanOptionalAction,
-        help="Enables an initial Stratified Group K-Fold cross validation to establish best training/validation split prior to training. Value of 1 enables the cross validation. Defaults to 0"
+        help="Enables an initial Stratified Group K-Fold cross validation to establish best training/validation split prior to training."
+    )
+
+    parser.add_argument(
+        "--data_augmentation",
+        action=argparse.BooleanOptionalAction,
+        help="Enables data augmentation to apply background noise to validation samples during training"
+    )
+
+    parser.add_argument(
+        "--sounds_path",
+        default=os.path.join(SCRIPT_DIR, 'background_noise'),
+        help="Path to directory containing audio files of background noise for use in data augmentation of validation samples during training"
     )
 
     #TODO: Add options for cross validation as arguments
@@ -678,6 +736,8 @@ if __name__ == "__main__":
     cfg.AUTOTUNE_EXECUTIONS_PER_TRIAL = args.autotune_executions_per_trial
 
     cfg.CROSS_VALIDATION = args.cross_validation
+    cfg.DATA_AUGMENTATION = args.data_augmentation
+    cfg.SOUNDS_PATH = args.sounds_path
 
     # Train model
     trainModel()

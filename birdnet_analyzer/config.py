@@ -195,6 +195,12 @@ MULTI_LABEL: bool = False
 # Maximises validation accuracy in training
 CROSS_VALIDATION: bool = False
 
+# If data augmentation is to be used to add background noise to validation samples during training
+DATA_AUGMENTATION: bool = False
+
+# Path to sounds to be used as noise when if augmenting data
+SOUNDS_PATH: str = 'background_noise/'
+
 #####################
 # Misc runtime vars #
 #####################
@@ -206,7 +212,7 @@ ERROR_LOG_FILE: str = "error_log.txt"
 FILE_LIST = []
 FILE_STORAGE_PATH: str = ""
 CV_LABELS = [] # List of Labels to be used for conversion of y_train during cross validation
-CV_GROUPS = [] # List of groups associated with each test sample, currently only supports groups from HumbugDB dataset
+CV_GROUPS = [] # List of groups associated with each test sample, currently only supports groups from InsectSound1000 dataset
 
 ######################
 # Get and set config #
@@ -276,6 +282,9 @@ def getConfig():
         "USE_NOISE": USE_NOISE,
         "CROSS_VALIDATION": CROSS_VALIDATION,
         "CV_LABELS": CV_LABELS,
+        "CV_GROUPS": CV_GROUPS,
+        "DATA_AUGMENTATION": DATA_AUGMENTATION,
+        "SOUNDS_PATH": SOUNDS_PATH,
     }
 
 
@@ -341,6 +350,9 @@ def setConfig(c):
     global USE_NOISE
     global CROSS_VALIDATION
     global CV_LABELS
+    global CV_GROUPS
+    global DATA_AUGMENTATION
+    global SOUNDS_PATH
 
     RANDOM_SEED = c["RANDOM_SEED"]
     MODEL_VERSION = c["MODEL_VERSION"]
@@ -403,3 +415,6 @@ def setConfig(c):
     USE_NOISE = c["USE_NOISE"]
     CROSS_VALIDATION = c["CROSS_VALIDATION"]
     CV_LABELS = c["CV_LABELS"]
+    CV_GROUPS = c["CV_GROUPS"]
+    DATA_AUGMENTATION = c["DATA_AUGMENTATION"]
+    SOUNDS_PATH = c["SOUNDS_PATH"]

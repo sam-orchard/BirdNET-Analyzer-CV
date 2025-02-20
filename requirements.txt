@@ -7,5 +7,6 @@ tqdm
 bottle
 requests
 keras-tuner
+audiomentations
 # below, to support birdnet_analyzer.gui
 matplotlib===3.9.3

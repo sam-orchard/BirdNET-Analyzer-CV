@@ -566,6 +566,8 @@ def trainModel(on_epoch_end=None, on_trial_result=None, on_data_load_end=None, a
     best_val_auprc = history.history["val_AUPRC"][np.argmin(history.history["val_loss"])]
     best_val_auroc = history.history["val_AUROC"][np.argmin(history.history["val_loss"])]
 
+    model.save_evaluation_metrics(cfg.CUSTOM_CLASSIFIER.replace(".tflite", "_EVAL.csv"), history)
+
     print("Saving model...", flush=True)
 
     try:

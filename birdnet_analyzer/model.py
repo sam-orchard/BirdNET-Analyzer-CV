@@ -33,6 +33,27 @@ M_INTERPRETER: tflite.Interpreter = None
 PBMODEL = None
 C_PBMODEL = None
 
+def save_evaluation_metrics(path, history):
+    """Saves the evaluation metrics from the fit history object
+
+    Args:
+        path: Path to the file.
+        history: History object containing the evaluation metrics
+    """
+    utils.save_params(
+        path,
+        (
+            "AUPRC",
+            "AUROC",
+            "Validation Loss"
+        ),
+        (
+            history.history["val_AUPRC"][np.argmin(history.history["val_loss"])],
+            history.history["val_AUROC"][np.argmin(history.history["val_loss"])],
+            history.history["val_loss"][np.argmin(history.history["val_loss"])]
+        )
+    )
+
 
 def save_model_params(path):
     """Saves the model parameters to a file.

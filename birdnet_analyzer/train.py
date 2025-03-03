@@ -354,7 +354,14 @@ def trainModel(on_epoch_end=None, on_trial_result=None, on_data_load_end=None, a
                         y_train_labels = np.array([cfg.CV_LABELS[i] for i in np.where(self.y_train)[1]])
                         groups = cfg.CV_GROUPS
                         if len(groups):
-                            cross_validator = StratifiedGroupKFold(n_splits=5)
+                            print(f'Groups: {groups} - No. of Groups: {len(np.unique(groups))}')
+                            # cross_validator = StratifiedGroupKFold(n_splits=5)
+                            # Temporarily just use StratifiedKFold while an issue with groups returning empty validation sets is considered
+                            if len(np.unique(groups)) < 5:
+                                n_splits = len(np.unique(groups))
+                            else:
+                                n_splits = 5
+                            cross_validator = StratifiedGroupKFold(n_splits=n_splits)
                         else:
                             cross_validator = StratifiedKFold(n_splits=5)
 
